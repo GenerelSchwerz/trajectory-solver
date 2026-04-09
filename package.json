@@ -1,0 +1,36 @@
+{
+  "name": "projectile-aim",
+  "version": "0.1.0",
+  "description": "Abstract aiming layer for converting 3D shot calculations into actionable aiming information.",
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf lib",
+    "prebuild": "pnpm run clean",
+    "test": "tsx --test test/**/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "keywords": [
+    "aiming",
+    "ballistics",
+    "3d",
+    "projectile"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.33.0",
+  "devDependencies": {
+    "@nxg-org/mineflayer-ender": "file:..\\mineflayer-ender",
+    "@nxg-org/mineflayer-util-plugin": "^1.9.0",
+    "@types/node": "^24.5.0",
+    "mineflayer": "^4.37.0",
+    "rimraf": "^6.0.1",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vec3": "^0.2.0"
+  }
+}
