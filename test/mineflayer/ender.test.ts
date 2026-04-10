@@ -17,6 +17,8 @@ import {
   estimatePitchWithLinearDrag,
   getClosestPointDistance,
   logReplayValues,
+  REPLAY_TEST_DV_STEP,
+  REPLAY_TEST_MAX_TICKS,
   solveReplayAim,
   solveReplayAimWithPitchHeuristic,
 } from "./enderTestUtils";
@@ -45,8 +47,8 @@ function createReplayFixture(
     toVector3(landingPos),
   );
 
-  enderman.maxTicks = options?.maxTicks ?? 100;
-  enderman.dvStep = options?.dvStep ?? 360;
+  enderman.maxTicks = options?.maxTicks ?? REPLAY_TEST_MAX_TICKS;
+  enderman.dvStep = options?.dvStep ?? REPLAY_TEST_DV_STEP;
 
   return {
     bot,
@@ -129,6 +131,9 @@ test("old solver: replay case can be evaluated through projectile-aim", () => {
       providedYawPitchSeed,
       { provideYaw: () => baseline.yaw },
     ).getCandidates(fixture.replayContext),
+    undefined,
+    false,
+    fixture.enderman.maxTicks,
   );
   const baselineDiagnostics = createShotDiagnostics(
     fixture.bot,
@@ -192,7 +197,7 @@ test("old solver: replay case can be evaluated through projectile-aim", () => {
 
 test("old solver: high-arc replay case with minFlightTicks can be evaluated through projectile-aim", () => {
   const fixture = createReplayFixture(new Vec3(-121.0, 4.0, -29.5), {
-    maxTicks: 140,
+    maxTicks: REPLAY_TEST_MAX_TICKS,
   });
   const minFlightTicks = 30;
   const baselineStartedAt = performance.now();
@@ -226,6 +231,9 @@ test("old solver: high-arc replay case with minFlightTicks can be evaluated thro
       providedYawPitchSeed,
       { provideYaw: () => baseline.yaw },
     ).getCandidates(fixture.replayContext),
+    undefined,
+    false,
+    fixture.enderman.maxTicks,
   );
   const baselineDiagnostics = createShotDiagnostics(
     fixture.bot,

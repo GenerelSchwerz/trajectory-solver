@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { performance } from "node:perf_hooks";
 
 import {
   AABBUtils,
@@ -13,6 +14,8 @@ import {
   createCandidateGenerator,
   createReplayContext,
   estimatePitchWithLinearDrag,
+  REPLAY_TEST_DV_STEP,
+  REPLAY_TEST_MAX_TICKS,
   solveReplayAimWithCollisionFallbackPitchHeuristic,
   solveReplayAimWithCollisionPitchHeuristic,
   solveReplayAimWithPitchHeuristic,
@@ -39,8 +42,8 @@ function createReplayFixture(
     toVector3(landingPos),
   );
 
-  enderman.maxTicks = options?.maxTicks ?? 100;
-  enderman.dvStep = options?.dvStep ?? 360;
+  enderman.maxTicks = options?.maxTicks ?? REPLAY_TEST_MAX_TICKS;
+  enderman.dvStep = options?.dvStep ?? REPLAY_TEST_DV_STEP;
 
   return {
     bot,
@@ -75,29 +78,52 @@ function measureAverageMs<TSolution extends { hit: boolean } | null>(
   };
 }
 
+function measureEnderAverageMs<TResult>(
+  iterations: number,
+  run: () => TResult,
+) {
+  let totalElapsedMs = 0;
+  let lastResult: TResult | null = null;
+
+  for (let index = 0; index < iterations; index += 1) {
+    const startedAt = performance.now();
+    lastResult = run();
+    totalElapsedMs += performance.now() - startedAt;
+  }
+
+  return {
+    averageElapsedMs: totalElapsedMs / iterations,
+    lastResult,
+  };
+}
+
 function printBenchmark(input: {
   label: string;
   iterations: number;
-  oldMs?: number;
-  fallbackMs: number;
+  enderMs: number;
+  noCollisionNoVerificationMs?: number;
+  noCollisionCheckMs: number;
   collisionMs: number;
 }) {
   console.log(
     [
       `[bench:${input.label}]`,
       `iterations=${input.iterations}`,
-      `old=${input.oldMs?.toFixed(3) ?? "N/A"}ms`,
-      `fallback=${input.fallbackMs.toFixed(3)}ms`,
+      `ender=${input.enderMs.toFixed(3)}ms`,
+      `no_collision_no_verification=${input.noCollisionNoVerificationMs?.toFixed(3) ?? "N/A"}ms`,
+      `no_collision_check=${input.noCollisionCheckMs.toFixed(3)}ms`,
       `collision=${input.collisionMs.toFixed(3)}ms`,
-      `fallback_vs_old=${input.oldMs ? (input.fallbackMs / Math.max(input.oldMs, 1e-9)).toFixed(2) : "N/A"}x`,
-      `collision_vs_old=${input.oldMs ? (input.collisionMs / Math.max(input.oldMs, 1e-9)).toFixed(2) : "N/A"}x`,
-      `collision_vs_fallback=${input.fallbackMs ? (input.collisionMs / Math.max(input.fallbackMs, 1e-9)).toFixed(2) : "N/A"}x`,
+      `no_collision_no_verification_vs_ender=${input.noCollisionNoVerificationMs ? (input.noCollisionNoVerificationMs / Math.max(input.enderMs, 1e-9)).toFixed(2) : "N/A"}x`,
+      `no_collision_check_vs_ender=${(input.noCollisionCheckMs / Math.max(input.enderMs, 1e-9)).toFixed(2)}x`,
+      `collision_vs_ender=${(input.collisionMs / Math.max(input.enderMs, 1e-9)).toFixed(2)}x`,
+      `collision_vs_no_collision_check=${(input.collisionMs / Math.max(input.noCollisionCheckMs, 1e-9)).toFixed(2)}x`,
     ].join(" "),
   );
 }
 
-test("benchmark: replay seed compares old vs fallback vs collision-aware", () => {
-  const fixture = createReplayFixture(new Vec3(-79.5, 4.0, -29.5));
+test("benchmark: replay seed compares ender vs heuristic variants", () => {
+  const options = { maxTicks: REPLAY_TEST_MAX_TICKS, dvStep: REPLAY_TEST_DV_STEP };
+  const fixture = createReplayFixture(new Vec3(-79.5, 4.0, -29.5), options);
   const originVelocity = getOriginVelocity(fixture.bot);
   const baseline = fixture.enderman.shotToAABB(
     fixture.landingAABB,
@@ -121,21 +147,32 @@ test("benchmark: replay seed compares old vs fallback vs collision-aware", () =>
     ).getCandidates(fixture.replayContext),
   );
 
-  const oldSolver = measureAverageMs(iterations, () =>
+  const enderSolver = measureEnderAverageMs(iterations, () =>
+    fixture.enderman.shotToAABB(
+      fixture.landingAABB,
+      fixture.landingPos,
+    ));
+  const noCollisionNoVerificationSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithPitchHeuristic(
       fixture.bot,
       fixture.landingAABB,
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      false,
+      fixture.enderman.maxTicks,
     ));
-  const fallbackSolver = measureAverageMs(iterations, () =>
+  const noCollisionCheckSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionFallbackPitchHeuristic(
       fixture.bot,
       fixture.landingAABB,
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      undefined,
+      fixture.enderman.maxTicks,
     ));
   const collisionSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionPitchHeuristic(
@@ -144,24 +181,29 @@ test("benchmark: replay seed compares old vs fallback vs collision-aware", () =>
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      undefined,
+      fixture.enderman.maxTicks,
     ));
 
   printBenchmark({
     label: "replay-seed",
     iterations,
-    oldMs: oldSolver.averageElapsedMs,
-    fallbackMs: fallbackSolver.averageElapsedMs,
+    enderMs: enderSolver.averageElapsedMs,
+    noCollisionNoVerificationMs: noCollisionNoVerificationSolver.averageElapsedMs,
+    noCollisionCheckMs: noCollisionCheckSolver.averageElapsedMs,
     collisionMs: collisionSolver.averageElapsedMs,
   });
 
-  assert.equal(oldSolver.lastResult?.solution?.hit, true);
-  assert.equal(fallbackSolver.lastResult?.solution?.hit, true);
+  assert.ok(enderSolver.lastResult?.hit, "ender replay benchmark should return a hit");
+  assert.equal(noCollisionNoVerificationSolver.lastResult?.solution?.hit, true);
+  assert.equal(noCollisionCheckSolver.lastResult?.solution?.hit, true);
   assert.equal(collisionSolver.lastResult?.solution?.hit, true);
 });
 
-test("benchmark: high-arc minFlightTicks compares old vs fallback vs collision-aware", () => {
+test("benchmark: high-arc minFlightTicks compares ender vs heuristic variants", () => {
   const fixture = createReplayFixture(new Vec3(-121.0, 4.0, -29.5), {
-    maxTicks: 140,
+    maxTicks: REPLAY_TEST_MAX_TICKS,
   });
   const originVelocity = getOriginVelocity(fixture.bot);
   const minFlightTicks = 30;
@@ -193,21 +235,34 @@ test("benchmark: high-arc minFlightTicks compares old vs fallback vs collision-a
     ).getCandidates(fixture.replayContext),
   );
 
-  const oldSolver = measureAverageMs(iterations, () =>
+  const enderSolver = measureEnderAverageMs(iterations, () =>
+    fixture.enderman.shotToAABB(
+      fixture.landingAABB,
+      fixture.landingPos,
+      undefined,
+      minFlightTicks,
+    ));
+  const noCollisionNoVerificationSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithPitchHeuristic(
       fixture.bot,
       fixture.landingAABB,
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      false,
+      fixture.enderman.maxTicks,
     ));
-  const fallbackSolver = measureAverageMs(iterations, () =>
+  const noCollisionCheckSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionFallbackPitchHeuristic(
       fixture.bot,
       fixture.landingAABB,
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      undefined,
+      fixture.enderman.maxTicks,
     ));
   const collisionSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionPitchHeuristic(
@@ -216,22 +271,27 @@ test("benchmark: high-arc minFlightTicks compares old vs fallback vs collision-a
       fixture.landingPos,
       originVelocity,
       initialCandidates,
+      undefined,
+      undefined,
+      fixture.enderman.maxTicks,
     ));
 
   printBenchmark({
     label: "high-arc-seed",
     iterations,
-    oldMs: oldSolver.averageElapsedMs,
-    fallbackMs: fallbackSolver.averageElapsedMs,
+    enderMs: enderSolver.averageElapsedMs,
+    noCollisionNoVerificationMs: noCollisionNoVerificationSolver.averageElapsedMs,
+    noCollisionCheckMs: noCollisionCheckSolver.averageElapsedMs,
     collisionMs: collisionSolver.averageElapsedMs,
   });
 
-  assert.equal(oldSolver.lastResult?.solution?.hit, true);
-  assert.equal(fallbackSolver.lastResult?.solution?.hit, true);
+  assert.ok(enderSolver.lastResult?.hit, "ender high-arc benchmark should return a hit");
+  assert.equal(noCollisionNoVerificationSolver.lastResult?.solution?.hit, true);
+  assert.equal(noCollisionCheckSolver.lastResult?.solution?.hit, true);
   assert.equal(collisionSolver.lastResult?.solution?.hit, true);
 });
 
-test("benchmark: blocked alternate-arc compares old vs fallback vs collision-aware", () => {
+test("benchmark: blocked alternate-arc compares ender vs checked variants", () => {
   const landingPos = new Vec3(-79.0, 4.0, -39.5);
   const blockingBlocks = [new Vec3(-77, 4, -36), new Vec3(-77, 5, -36)];
   const openFixture = createReplayFixture(landingPos);
@@ -266,10 +326,14 @@ test("benchmark: blocked alternate-arc compares old vs fallback vs collision-awa
       { provideYaw: () => openArc.yaw },
     ).getCandidates(blockedFixture.replayContext),
   );
-  const combinedCandidates = [...initialCandidates, ...alternateCandidates];
-
-
-  const fallbackSolver = measureAverageMs(iterations, () =>
+  const enderSolver = measureEnderAverageMs(iterations, () =>
+    blockedFixture.enderman.shotToAABB(
+      blockedFixture.landingAABB,
+      blockedFixture.landingPos,
+      undefined,
+      20,
+    ));
+  const noCollisionCheckSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionFallbackPitchHeuristic(
       blockedFixture.bot,
       blockedFixture.landingAABB,
@@ -277,6 +341,8 @@ test("benchmark: blocked alternate-arc compares old vs fallback vs collision-awa
       blockedOriginVelocity,
       initialCandidates,
       alternateCandidates,
+      undefined,
+      blockedFixture.enderman.maxTicks,
     ));
   const collisionSolver = measureAverageMs(iterations, () =>
     solveReplayAimWithCollisionPitchHeuristic(
@@ -286,15 +352,19 @@ test("benchmark: blocked alternate-arc compares old vs fallback vs collision-awa
       blockedOriginVelocity,
       initialCandidates,
       alternateCandidates,
+      undefined,
+      blockedFixture.enderman.maxTicks,
     ));
 
   printBenchmark({
     label: "blocked-alt-arc",
     iterations,
-    fallbackMs: fallbackSolver.averageElapsedMs,
+    enderMs: enderSolver.averageElapsedMs,
+    noCollisionCheckMs: noCollisionCheckSolver.averageElapsedMs,
     collisionMs: collisionSolver.averageElapsedMs,
   });
 
-  assert.equal(fallbackSolver.lastResult?.solution?.hit, true);
+  assert.ok(enderSolver.lastResult?.hit, "ender blocked benchmark should return a hit");
+  assert.equal(noCollisionCheckSolver.lastResult?.solution?.hit, true);
   assert.equal(collisionSolver.lastResult?.solution?.hit, true);
 });

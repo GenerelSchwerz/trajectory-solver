@@ -22,6 +22,8 @@ import {
 export type Point3 = { x: number; y: number; z: number };
 export type ReplayAabb = ReturnType<typeof AABBUtils.getEntityAABBRaw>;
 export type ReplaySolution = ReturnType<typeof solveAim>;
+export const REPLAY_TEST_MAX_TICKS = 300;
+export const REPLAY_TEST_DV_STEP = 720;
 
 function getMagnitude(vector: Point3): number {
   return Math.sqrt(
@@ -195,7 +197,7 @@ export function createTrajectoryProvider(
   landingPos: Vec3,
   originVelocity: Vec3,
   blockChecking = false,
-  maxTicks = 300,
+  maxTicks = REPLAY_TEST_MAX_TICKS,
 ): TrajectoryProvider {
   return {
     getTrajectory(_context, candidate) {
@@ -258,6 +260,7 @@ export function solveReplayAim(
   landingPos: Vec3,
   originVelocity: Vec3,
   candidates: Iterable<LaunchCandidate>,
+  maxTicks = REPLAY_TEST_MAX_TICKS,
 ): { solution: ReplaySolution; elapsedMs: number } {
   const startedAt = performance.now();
   const solution = solveAim({
@@ -266,7 +269,14 @@ export function solveReplayAim(
       landingAABB,
       toVector3(landingPos),
     ),
-    provider: createTrajectoryProvider(bot, landingAABB, landingPos, originVelocity),
+    provider: createTrajectoryProvider(
+      bot,
+      landingAABB,
+      landingPos,
+      originVelocity,
+      false,
+      maxTicks,
+    ),
     candidates,
   });
 
@@ -284,7 +294,7 @@ export function solveReplayAimWithPitchHeuristic(
   candidates: Iterable<LaunchCandidate>,
   initialDeltaRadians = 0.04,
   blockChecking = false,
-  maxTicks = 300,
+  maxTicks = REPLAY_TEST_MAX_TICKS,
 ): { solution: ReplaySolution; elapsedMs: number } {
   const startedAt = performance.now();
   const solution = solveAimWithPitchHeuristic({
@@ -313,6 +323,7 @@ export function solveReplayAimWithCollisionFallbackPitchHeuristic(
   initialCandidates: Iterable<LaunchCandidate>,
   alternateCandidates?: Iterable<LaunchCandidate>,
   initialDeltaRadians = 0.04,
+  maxTicks = REPLAY_TEST_MAX_TICKS,
 ): { solution: ReplaySolution; elapsedMs: number } {
   const startedAt = performance.now();
   const context = createReplayContext(
@@ -328,6 +339,7 @@ export function solveReplayAimWithCollisionFallbackPitchHeuristic(
       landingPos,
       originVelocity,
       false,
+      maxTicks,
     ),
     collisionAwareProvider: createTrajectoryProvider(
       bot,
@@ -335,6 +347,7 @@ export function solveReplayAimWithCollisionFallbackPitchHeuristic(
       landingPos,
       originVelocity,
       true,
+      maxTicks,
     ),
     initialCandidates,
     alternateCandidates,
@@ -356,6 +369,7 @@ export function solveReplayAimWithCollisionPitchHeuristic(
   initialCandidates: Iterable<LaunchCandidate>,
   alternateCandidates?: Iterable<LaunchCandidate>,
   initialDeltaRadians = 0.04,
+  maxTicks = REPLAY_TEST_MAX_TICKS,
 ): { solution: ReplaySolution; elapsedMs: number } {
   const startedAt = performance.now();
   const context = createReplayContext(
@@ -371,6 +385,7 @@ export function solveReplayAimWithCollisionPitchHeuristic(
       landingPos,
       originVelocity,
       false,
+      maxTicks,
     ),
     collisionAwareProvider: createTrajectoryProvider(
       bot,
@@ -378,6 +393,7 @@ export function solveReplayAimWithCollisionPitchHeuristic(
       landingPos,
       originVelocity,
       true,
+      maxTicks,
     ),
     initialCandidates,
     alternateCandidates,
@@ -408,6 +424,7 @@ export function createShotDiagnostics(
     },
     bot,
   );
+  shot.maxTicks = REPLAY_TEST_MAX_TICKS;
   const result = shot.calcToAABB(landingAABB, landingPos, true);
 
   return {

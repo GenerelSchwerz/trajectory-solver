@@ -17,6 +17,8 @@ import {
   estimatePitchWithLinearDrag,
   getClosestPointDistance,
   logReplayValues,
+  REPLAY_TEST_DV_STEP,
+  REPLAY_TEST_MAX_TICKS,
   solveReplayAimWithCollisionFallbackPitchHeuristic,
 } from "./enderTestUtils";
 
@@ -44,8 +46,8 @@ function createReplayFixture(
     toVector3(landingPos),
   );
 
-  enderman.maxTicks = options?.maxTicks ?? 100;
-  enderman.dvStep = options?.dvStep ?? 360;
+  enderman.maxTicks = options?.maxTicks ?? REPLAY_TEST_MAX_TICKS;
+  enderman.dvStep = options?.dvStep ?? REPLAY_TEST_DV_STEP;
 
   return {
     bot,
@@ -164,6 +166,9 @@ test("new solver: replay case can be evaluated through projectile-aim", () => {
       providedYawPitchSeed,
       { provideYaw: () => baseline.yaw },
     ).getCandidates(fixture.replayContext),
+    undefined,
+    undefined,
+    fixture.enderman.maxTicks,
   );
   const baselineDiagnostics = createShotDiagnostics(
     fixture.bot,
@@ -252,6 +257,8 @@ test("new solver: replay alt-seed case successfully finds high arc angle", () =>
       Math.PI / 2,
       { provideYaw: () => baseline.yaw },
     ).getCandidates(fixture.replayContext),
+    undefined,
+    fixture.enderman.maxTicks,
   );
 
   // console.log('bot position', toVector3(fixture.bot.entity.position));
@@ -366,6 +373,8 @@ test("new solver: blocked straight-shot replay recovers an alternate arc", () =>
       openArc.pitch,
       { provideYaw: () => openArc.yaw },
     ).getCandidates(blockedFixture.replayContext),
+    undefined,
+    blockedFixture.enderman.maxTicks,
   );
 
   printReplayMetrics({
@@ -471,6 +480,8 @@ test("new solver: blocked straight-shot replay identifies the alternate angle ca
       openArc.pitch,
       { provideYaw: () => openArc.yaw },
     ).getCandidates(blockedFixture.replayContext),
+    undefined,
+    blockedFixture.enderman.maxTicks,
   );
   const fallbackMetrics = getCollisionFallbackIterations(recoveredShot.solution);
   const [initialStage, alternateStage] = fallbackMetrics.stages ?? [];
@@ -543,7 +554,7 @@ test("new solver: blocked straight-shot replay identifies the alternate angle ca
 
 test("new solver: high-arc replay case with minFlightTicks can be evaluated through projectile-aim", () => {
   const fixture = createReplayFixture(new Vec3(-121.0, 4.0, -29.5), {
-    maxTicks: 140,
+    maxTicks: REPLAY_TEST_MAX_TICKS,
   });
   const minFlightTicks = 30;
   const baselineStartedAt = performance.now();
@@ -577,6 +588,9 @@ test("new solver: high-arc replay case with minFlightTicks can be evaluated thro
       providedYawPitchSeed,
       { provideYaw: () => baseline.yaw },
     ).getCandidates(fixture.replayContext),
+    undefined,
+    undefined,
+    fixture.enderman.maxTicks,
   );
   const baselineDiagnostics = createShotDiagnostics(
     fixture.bot,
