@@ -17,6 +17,11 @@ export interface TrajectorySample {
   readonly velocity?: Vector3;
 }
 
+export interface TrajectoryTerminalPoint extends TrajectorySample {
+  readonly kind: "terminal";
+  readonly label?: "closest-point" | "hit-point" | "collision-point";
+}
+
 export interface SegmentHit {
   readonly hit: boolean;
   readonly point?: Vector3;
@@ -73,6 +78,7 @@ export interface TrajectoryComputation<
   TInfo extends TrajectoryInfo = TrajectoryInfo,
 > {
   readonly samples: Iterable<TrajectorySample>;
+  readonly terminalPoint?: TrajectoryTerminalPoint;
   readonly info: TInfo;
 }
 
@@ -126,6 +132,7 @@ export interface EvaluatedTrajectory<
   TInfo extends TrajectoryInfo = TrajectoryInfo,
 > {
   readonly samples: Iterable<TrajectorySample>;
+  readonly terminalPoint?: TrajectoryTerminalPoint;
   readonly info: TInfo;
 }
 
@@ -169,6 +176,36 @@ export interface PitchHeuristicSearchRequest<
   TCandidate extends LaunchCandidate = LaunchCandidate,
   TInfo extends TrajectoryInfo = TrajectoryInfo,
 > extends AimSearchRequest<TContext, TCandidate, TInfo> {
+  readonly initialDeltaRadians: number;
+  readonly maxIterations?: number;
+  readonly createCandidate?: (input: {
+    baseCandidate: TCandidate;
+    pitchRadians: number;
+    deltaRadians: number;
+    iteration: number;
+    history: readonly PitchHeuristicIteration[];
+  }) => TCandidate;
+}
+
+export interface CollisionFallbackPitchSearchRequest<
+  TContext = AimContext,
+  TCandidate extends LaunchCandidate = LaunchCandidate,
+  TCollisionFreeInfo extends TrajectoryInfo = TrajectoryInfo,
+  TCollisionAwareInfo extends TrajectoryInfo = TrajectoryInfo,
+> {
+  readonly context: TContext;
+  readonly collisionFreeProvider: TrajectoryProvider<
+    TContext,
+    TCandidate,
+    TCollisionFreeInfo
+  >;
+  readonly collisionAwareProvider: TrajectoryProvider<
+    TContext,
+    TCandidate,
+    TCollisionAwareInfo
+  >;
+  readonly initialCandidates: Iterable<TCandidate>;
+  readonly alternateCandidates?: Iterable<TCandidate>;
   readonly initialDeltaRadians: number;
   readonly maxIterations?: number;
   readonly createCandidate?: (input: {

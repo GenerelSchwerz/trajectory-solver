@@ -3,6 +3,8 @@ import { performance } from "node:perf_hooks";
 import {
   GridCandidateGenerator,
   solveAim,
+  solveAimWithCollisionPitchHeuristic,
+  solveAimWithCollisionFallbackPitchHeuristic,
   solveAimWithPitchHeuristic,
   type LaunchCandidate,
   type TrajectoryProvider,
@@ -192,9 +194,11 @@ export function createTrajectoryProvider(
   landingAABB: ReplayAabb,
   landingPos: Vec3,
   originVelocity: Vec3,
+  blockChecking = false,
+  maxTicks = 300,
 ): TrajectoryProvider {
   return {
-    *getTrajectory(_context, candidate) {
+    getTrajectory(_context, candidate) {
       const shot = EnderShotFactory.fromPlayer(
         {
           position: bot.entity.position,
@@ -204,21 +208,30 @@ export function createTrajectoryProvider(
         },
         bot,
       );
-      const result = shot.calcToAABB(landingAABB, landingPos, true);
-
-      for (let index = 0; index < shot.points.length; index += 1) {
-        yield {
+      shot.maxTicks = maxTicks;
+      const result = shot.calcToAABB(landingAABB, landingPos, blockChecking);
+      // console.log(shot.points.length, "points calculated for candidate", candidate);
+      return {
+        samples: shot.points.map((point, index) => ({
           tick: index,
-          position: toVector3(shot.points[index]),
-        };
-      }
-
-      if (result.closestPoint) {
-        yield {
-          tick: shot.points.length,
-          position: toVector3(result.closestPoint),
-        };
-      }
+          position: toVector3(point),
+        })),
+        terminalPoint: result.closestPoint
+          ? {
+              kind: "terminal" as const,
+              label: landingAABB.containsVec(result.closestPoint)
+                ? ("hit-point" as const)
+                : ("closest-point" as const),
+              tick: shot.points.length,
+              position: toVector3(result.closestPoint),
+            }
+          : undefined,
+        info: {
+          kind: "piecewise" as const,
+          sampleCount: shot.points.length,
+          terminatedEarly: !!result.block || !!result.hit,
+        },
+      };
     },
   };
 }
@@ -270,6 +283,8 @@ export function solveReplayAimWithPitchHeuristic(
   originVelocity: Vec3,
   candidates: Iterable<LaunchCandidate>,
   initialDeltaRadians = 0.04,
+  blockChecking = false,
+  maxTicks = 300,
 ): { solution: ReplaySolution; elapsedMs: number } {
   const startedAt = performance.now();
   const solution = solveAimWithPitchHeuristic({
@@ -278,8 +293,94 @@ export function solveReplayAimWithPitchHeuristic(
       landingAABB,
       toVector3(landingPos),
     ),
-    provider: createTrajectoryProvider(bot, landingAABB, landingPos, originVelocity),
+    provider: createTrajectoryProvider(bot, landingAABB, landingPos, originVelocity, blockChecking, maxTicks),
     candidates,
+    initialDeltaRadians,
+    maxIterations: 30,
+  });
+
+  return {
+    solution,
+    elapsedMs: performance.now() - startedAt,
+  };
+}
+
+export function solveReplayAimWithCollisionFallbackPitchHeuristic(
+  bot: Bot,
+  landingAABB: ReplayAabb,
+  landingPos: Vec3,
+  originVelocity: Vec3,
+  initialCandidates: Iterable<LaunchCandidate>,
+  alternateCandidates?: Iterable<LaunchCandidate>,
+  initialDeltaRadians = 0.04,
+): { solution: ReplaySolution; elapsedMs: number } {
+  const startedAt = performance.now();
+  const context = createReplayContext(
+    toVector3(bot.entity.position),
+    landingAABB,
+    toVector3(landingPos),
+  );
+  const solution = solveAimWithCollisionFallbackPitchHeuristic({
+    context,
+    collisionFreeProvider: createTrajectoryProvider(
+      bot,
+      landingAABB,
+      landingPos,
+      originVelocity,
+      false,
+    ),
+    collisionAwareProvider: createTrajectoryProvider(
+      bot,
+      landingAABB,
+      landingPos,
+      originVelocity,
+      true,
+    ),
+    initialCandidates,
+    alternateCandidates,
+    initialDeltaRadians,
+    maxIterations: 30,
+  });
+
+  return {
+    solution,
+    elapsedMs: performance.now() - startedAt,
+  };
+}
+
+export function solveReplayAimWithCollisionPitchHeuristic(
+  bot: Bot,
+  landingAABB: ReplayAabb,
+  landingPos: Vec3,
+  originVelocity: Vec3,
+  initialCandidates: Iterable<LaunchCandidate>,
+  alternateCandidates?: Iterable<LaunchCandidate>,
+  initialDeltaRadians = 0.04,
+): { solution: ReplaySolution; elapsedMs: number } {
+  const startedAt = performance.now();
+  const context = createReplayContext(
+    toVector3(bot.entity.position),
+    landingAABB,
+    toVector3(landingPos),
+  );
+  const solution = solveAimWithCollisionPitchHeuristic({
+    context,
+    collisionFreeProvider: createTrajectoryProvider(
+      bot,
+      landingAABB,
+      landingPos,
+      originVelocity,
+      false,
+    ),
+    collisionAwareProvider: createTrajectoryProvider(
+      bot,
+      landingAABB,
+      landingPos,
+      originVelocity,
+      true,
+    ),
+    initialCandidates,
+    alternateCandidates,
     initialDeltaRadians,
     maxIterations: 30,
   });
@@ -322,20 +423,30 @@ export function createShotDiagnostics(
 
 export function logReplayValues(input: {
   enabled?: boolean;
+  onlyOnFailure?: boolean;
   baselineElapsedMs: number;
   providedYawElapsedMs: number;
   summary: unknown;
 }) {
-  if (!input.enabled) {
-    return;
+  const print = () => {
+    console.log("mineflayer-ender solve time (ms):", input.baselineElapsedMs.toFixed(3));
+    console.log("projectile-aim provided yaw solve time (ms):", input.providedYawElapsedMs.toFixed(3));
+    console.log(
+      "provided yaw check:\n" +
+        JSON.stringify(input.summary, null, 2),
+    );
+  };
+
+  if (!input.enabled && !input.onlyOnFailure) {
+    return () => undefined;
   }
 
-  console.log("mineflayer-ender solve time (ms):", input.baselineElapsedMs.toFixed(3));
-  console.log("projectile-aim provided yaw solve time (ms):", input.providedYawElapsedMs.toFixed(3));
-  console.log(
-    "provided yaw check:\n" +
-      JSON.stringify(input.summary, null, 2),
-  );
+  if (input.enabled) {
+    print();
+    return print;
+  }
+
+  return print;
 }
 
 export function getClosestPointDistance(a: Point3, b: Point3) {

@@ -12,6 +12,7 @@ import type {
   TrajectoryInfo,
   TrajectoryProvider,
   TrajectorySample,
+  TrajectoryTerminalPoint,
   TrajectorySource,
 } from "./types";
 import {
@@ -112,6 +113,7 @@ export function normalizeTrajectorySource<TInfo extends TrajectoryInfo>(
   if (isTrajectoryComputation(source)) {
     return {
       samples: source.samples,
+      terminalPoint: source.terminalPoint,
       info: source.info,
     };
   }
@@ -124,69 +126,134 @@ export function normalizeTrajectorySource<TInfo extends TrajectoryInfo>(
   };
 }
 
+function evaluateTrajectoryPoint(
+  context: AimContext,
+  sample: TrajectorySample,
+  previousSample: TrajectorySample | null,
+  state: {
+    closestSample: TrajectorySample | null;
+    shortestDistance: number;
+  },
+  options?: {
+    allowDirectHit?: boolean;
+    allowSegmentTrace?: boolean;
+  },
+): AimEvaluation | null {
+  const distance = getTargetDistance(context, sample);
+
+  if (distance < state.shortestDistance) {
+    state.shortestDistance = distance;
+    state.closestSample = sample;
+  }
+
+  if ((options?.allowDirectHit ?? true) && targetContainsPoint(context, sample.position)) {
+    return {
+      hit: true,
+      distance,
+      closestSample: sample,
+      hitPoint: sample.position,
+    };
+  }
+
+  if (!previousSample || options?.allowSegmentTrace === false) {
+    return null;
+  }
+
+  const tracedSegmentHit = traceTargetSegment(
+    context,
+    previousSample.position,
+    sample.position,
+  );
+
+  if (tracedSegmentHit?.hit) {
+    return {
+      hit: true,
+      distance: tracedSegmentHit.point
+        ? context.target.geometry.distanceTo?.(tracedSegmentHit.point) ??
+          getDistance(tracedSegmentHit.point, getReferencePoint(context))
+        : distance,
+      closestSample: sample,
+      hitPoint: tracedSegmentHit.point ?? sample.position,
+      hitFace: tracedSegmentHit.face,
+    };
+  }
+
+  if (
+    targetIntersectsSegment(
+      context,
+      previousSample.position,
+      sample.position,
+    )
+  ) {
+    return {
+      hit: true,
+      distance,
+      closestSample: sample,
+      hitPoint: sample.position,
+    };
+  }
+
+  return null;
+}
+
 export function evaluateTrajectory(
   context: AimContext,
   samples: Iterable<TrajectorySample>,
 ): AimEvaluation | null {
+  return evaluateEvaluatedTrajectory(context, {
+    samples,
+    info: {
+      kind: "piecewise",
+    },
+  });
+}
+
+function evaluateEvaluatedTrajectory(
+  context: AimContext,
+  trajectory: EvaluatedTrajectory,
+): AimEvaluation | null {
   let closestSample: TrajectorySample | null = null;
   let shortestDistance = Number.POSITIVE_INFINITY;
   let previousSample: TrajectorySample | null = null;
+  const state = {
+    closestSample,
+    shortestDistance,
+  };
 
-  for (const sample of samples) {
-    const distance = getTargetDistance(context, sample);
+  for (const sample of trajectory.samples) {
+    const evaluation = evaluateTrajectoryPoint(
+      context,
+      sample,
+      previousSample,
+      state,
+    );
 
-    if (distance < shortestDistance) {
-      shortestDistance = distance;
-      closestSample = sample;
-    }
-
-    if (targetContainsPoint(context, sample.position)) {
-      return {
-        hit: true,
-        distance,
-        closestSample: sample,
-        hitPoint: sample.position,
-      };
-    }
-
-    if (previousSample) {
-      const tracedSegmentHit = traceTargetSegment(
-        context,
-        previousSample.position,
-        sample.position,
-      );
-
-      if (tracedSegmentHit?.hit) {
-        return {
-          hit: true,
-          distance: tracedSegmentHit.point
-            ? context.target.geometry.distanceTo?.(tracedSegmentHit.point) ??
-              getDistance(tracedSegmentHit.point, getReferencePoint(context))
-            : distance,
-          closestSample: sample,
-          hitPoint: tracedSegmentHit.point ?? sample.position,
-          hitFace: tracedSegmentHit.face,
-        };
-      }
-
-      if (
-        targetIntersectsSegment(
-          context,
-          previousSample.position,
-          sample.position,
-        )
-      ) {
-        return {
-          hit: true,
-          distance,
-          closestSample: sample,
-          hitPoint: sample.position,
-        };
-      }
+    if (evaluation) {
+      return evaluation;
     }
 
     previousSample = sample;
   }
+
+  if (trajectory.terminalPoint) {
+    const evaluation = evaluateTrajectoryPoint(
+      context,
+      trajectory.terminalPoint,
+      null,
+      state,
+      {
+        allowDirectHit: trajectory.terminalPoint.label === "hit-point",
+        allowSegmentTrace: false,
+      },
+    );
+
+    if (evaluation) {
+      return evaluation;
+    }
+  }
+
+  closestSample = state.closestSample;
+  shortestDistance = state.shortestDistance;
 
   if (!closestSample) {
     return null;
@@ -254,7 +321,7 @@ function evaluateCandidate<
   const trajectory = normalizeTrajectorySource(
     provider.getTrajectory(context, candidate),
   );
-  const evaluation = evaluateTrajectory(context, trajectory.samples);
+  const evaluation = evaluateEvaluatedTrajectory(context, trajectory);
 
   if (!evaluation) {
     return null;
@@ -316,11 +383,107 @@ function getClosestSampleDirection(
   return { x: 0, y: 0, z: 0 };
 }
 
+function getHorizontalProgress(
+  origin: Vector3,
+  targetPoint: Vector3,
+  point: Vector3,
+): { along: number; targetAlong: number } | null {
+  const targetVector = {
+    x: targetPoint.x - origin.x,
+    z: targetPoint.z - origin.z,
+  };
+  const targetAlong = Math.hypot(targetVector.x, targetVector.z);
+
+  if (targetAlong <= 1e-6) {
+    return null;
+  }
+
+  const unit = {
+    x: targetVector.x / targetAlong,
+    z: targetVector.z / targetAlong,
+  };
+  const pointVector = {
+    x: point.x - origin.x,
+    z: point.z - origin.z,
+  };
+
+  return {
+    along: pointVector.x * unit.x + pointVector.z * unit.z,
+    targetAlong,
+  };
+}
+
+function getPitchTravelStateFromXZAlignment(
+  context: AimContext,
+  samples: readonly TrajectorySample[],
+): "overshoot" | "undershoot" | null {
+  const targetPoint = getIdealPoint(context) ?? getReferencePoint(context);
+  const progresses = samples.map((sample) => ({
+    sample,
+    progress: getHorizontalProgress(context.origin, targetPoint, sample.position),
+  }));
+  const validProgresses = progresses.filter(
+    (entry): entry is {
+      sample: TrajectorySample;
+      progress: { along: number; targetAlong: number };
+    } => entry.progress !== null,
+  );
+
+  if (validProgresses.length === 0) {
+    return null;
+  }
+
+  const targetAlong = validProgresses[0].progress.targetAlong;
+  for (let index = 1; index < validProgresses.length; index += 1) {
+    const previous = validProgresses[index - 1];
+    const current = validProgresses[index];
+
+    if (
+      previous.progress.along > targetAlong + 1e-6 ||
+      current.progress.along < targetAlong - 1e-6
+    ) {
+      continue;
+    }
+
+    const alongDelta = current.progress.along - previous.progress.along;
+
+    if (Math.abs(alongDelta) <= 1e-6) {
+      const alignedY = current.sample.position.y;
+      return alignedY > targetPoint.y + 1e-6 ? "overshoot" : "undershoot";
+    }
+
+    const interpolation =
+      (targetAlong - previous.progress.along) / alongDelta;
+    const alignedY =
+      previous.sample.position.y +
+      (current.sample.position.y - previous.sample.position.y) * interpolation;
+
+    return alignedY > targetPoint.y + 1e-6 ? "overshoot" : "undershoot";
+  }
+
+  const nearest = validProgresses.reduce((best, current) =>
+    Math.abs(current.progress.along - targetAlong) <
+    Math.abs(best.progress.along - targetAlong)
+      ? current
+      : best,
+  );
+
+  return nearest.sample.position.y > targetPoint.y + 1e-6
+    ? "overshoot"
+    : "undershoot";
+}
+
 function getPitchTravelState(
   context: AimContext,
   evaluation: AimEvaluation,
   samples: readonly TrajectorySample[],
 ): "overshoot" | "undershoot" {
+  const xzAlignedState = getPitchTravelStateFromXZAlignment(context, samples);
+
+  if (xzAlignedState) {
+    return xzAlignedState;
+  }
+
   const targetPoint = getIdealPoint(context) ?? getReferencePoint(context);
   const closestPoint = evaluation.hitPoint ?? evaluation.closestSample.position;
   const velocity = getClosestSampleDirection(samples, evaluation.closestSample);
@@ -363,12 +526,16 @@ function materializeHeuristicResult<
     solution: AimSolution<TContext, TCandidate, TInfo>;
   },
 ): PitchHeuristicResult<TContext, TCandidate, TInfo> {
-  const samples = Array.isArray(result.trajectory.samples)
+  const baseSamples = Array.isArray(result.trajectory.samples)
     ? result.trajectory.samples
     : Array.from(result.trajectory.samples);
+  const samples =
+    result.trajectory.terminalPoint
+      ? [...baseSamples, result.trajectory.terminalPoint]
+      : baseSamples;
   const trajectory = {
     ...result.trajectory,
-    samples,
+    samples: baseSamples,
   };
 
   return {
@@ -506,7 +673,7 @@ export function solveAimWithPitchHeuristic<
     | PitchHeuristicResult<TContext, TCandidate, TInfo>
     | null = null;
   let bestQualityDistance = Number.POSITIVE_INFINITY;
-  let deltaMagnitude = roundPitchValue(Math.abs(request.initialDeltaRadians));
+  const deltaMagnitude = roundPitchValue(Math.abs(request.initialDeltaRadians));
 
   for (const baseCandidate of request.candidates) {
     const history: PitchHeuristicIteration[] = [];

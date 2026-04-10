@@ -27,6 +27,11 @@ export interface ReplayBot {
   };
 }
 
+export interface ReplayBotOptions {
+  readonly solidBlocks?: readonly Vec3Instance[];
+  readonly includeGroundPlane?: boolean;
+}
+
 export function toVector3(vector: Vec3Instance) {
   return {
     x: vector.x,
@@ -56,15 +61,29 @@ function createSolidBlock(position: Vec3Instance) {
   };
 }
 
-export function createReplayBot(): Bot {
+export function createReplayBot(options: ReplayBotOptions = {}): Bot {
+  const {
+    solidBlocks = [],
+    includeGroundPlane = true,
+  } = options;
+
   return {
     on: () => undefined,
     blockAt: (pos: Vec3Instance) => {
       const floored = pos.floored();
 
-      if (floored.y !== 3) return null;
-      // if (floored.x < -90 || floored.x > -60) return null;
-      // if (floored.z < -45 || floored.z > -20) return null;
+      if (
+        solidBlocks.some(
+          (block) =>
+            block.x === floored.x &&
+            block.y === floored.y &&
+            block.z === floored.z,
+        )
+      ) {
+        return createSolidBlock(floored);
+      }
+
+      if (!includeGroundPlane || floored.y !== 3) return null;
 
       return createSolidBlock(floored);
     },
